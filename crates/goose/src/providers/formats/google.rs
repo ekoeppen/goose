@@ -227,38 +227,6 @@ enum SignedTextHandling {
     SignedTextAsRegularText,
 }
 
-pub fn process_response_part(
-    part: &Value,
-    last_signature: &mut Option<String>,
-) -> Option<MessageContent> {
-    let has_signature = part.get(THOUGHT_SIGNATURE_KEY).is_some();
-    let handling = if has_signature {
-        SignedTextHandling::SignedTextAsThinking
-    } else {
-        SignedTextHandling::SignedTextAsRegularText
-    };
-    process_response_part_impl(part, last_signature, handling)
-}
-
-/// Gemini 2.x includes thoughtSignature on first chunk as metadata, not actual thinking.
-fn process_response_part_for_model(
-    part: &Value,
-    last_signature: &mut Option<String>,
-    model_version: Option<&str>,
-) -> Option<MessageContent> {
-    let is_gemini_2 = model_version
-        .map(|m| m.starts_with("gemini-2"))
-        .unwrap_or(false);
-
-    let has_signature = part.get(THOUGHT_SIGNATURE_KEY).is_some();
-    let handling = if has_signature && !is_gemini_2 {
-        SignedTextHandling::SignedTextAsThinking
-    } else {
-        SignedTextHandling::SignedTextAsRegularText
-    };
-    process_response_part_impl(part, last_signature, handling)
-}
-
 fn process_response_part_non_streaming(
     part: &Value,
     last_signature: &mut Option<String>,
@@ -488,8 +456,6 @@ where
                 }
             }
 
-            let model_version = chunk.get("modelVersion").and_then(|v| v.as_str());
-
             let parts = chunk
                 .get("candidates")
                 .and_then(|v| v.as_array())
@@ -500,7 +466,9 @@ where
 
             if let Some(parts) = parts {
                 for part in parts {
-                    if let Some(content) = process_response_part_for_model(part, &mut last_signature, model_version) {
+                    // Always emit text as regular text during streaming — we can't
+                    // know yet whether function calls will follow.
+                    if let Some(content) = process_response_part_impl(part, &mut last_signature, SignedTextHandling::SignedTextAsRegularText) {
                         let message = Message::new(
                             Role::Assistant,
                             chrono::Utc::now().timestamp(),
@@ -1192,6 +1160,7 @@ mod tests {
     async fn test_streaming_with_thought_signature() {
         use futures::StreamExt;
 
+        // Streaming always emits signed text as regular text.
         let gemini3_stream = concat!(
             r#"data: {"candidates": [{"content": {"role": "model", "#,
             r#""parts": [{"text": "Begin", "thoughtSignature": "sig123"}]}}], "#,
@@ -1206,21 +1175,17 @@ mod tests {
         let mut message_stream = std::pin::pin!(response_to_streaming_message(stream));
 
         let mut text_parts = Vec::new();
-        let mut thinking_parts = Vec::new();
 
         while let Some(result) = message_stream.next().await {
             let (message, _usage) = result.unwrap();
             if let Some(msg) = message {
-                match msg.content.first() {
-                    Some(MessageContent::Text(text)) => text_parts.push(text.text.clone()),
-                    Some(MessageContent::Thinking(t)) => thinking_parts.push(t.thinking.clone()),
-                    _ => {}
+                if let Some(MessageContent::Text(text)) = msg.content.first() {
+                    text_parts.push(text.text.clone());
                 }
             }
         }
 
-        assert_eq!(thinking_parts, vec!["Begin"]);
-        assert_eq!(text_parts, vec![" end"]);
+        assert_eq!(text_parts, vec!["Begin", " end"]);
 
         let gemini25_stream = concat!(
             r#"data: {"candidates": [{"content": {"role": "model", "#,
@@ -1261,21 +1226,17 @@ mod tests {
         let mut message_stream = std::pin::pin!(response_to_streaming_message(stream));
 
         let mut text_parts = Vec::new();
-        let mut thinking_parts = Vec::new();
 
         while let Some(result) = message_stream.next().await {
             let (message, _usage) = result.unwrap();
             if let Some(msg) = message {
-                match msg.content.first() {
-                    Some(MessageContent::Text(text)) => text_parts.push(text.text.clone()),
-                    Some(MessageContent::Thinking(t)) => thinking_parts.push(t.thinking.clone()),
-                    _ => {}
+                if let Some(MessageContent::Text(text)) = msg.content.first() {
+                    text_parts.push(text.text.clone());
                 }
             }
         }
 
-        assert_eq!(thinking_parts, vec!["Begin"]);
-        assert_eq!(text_parts, vec![" end"]);
+        assert_eq!(text_parts, vec!["Begin", " end"]);
     }
 
     #[tokio::test]

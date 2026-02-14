@@ -164,6 +164,7 @@ pub struct CliSession {
     edit_mode: Option<EditMode>,
     retry_config: Option<RetryConfig>,
     output_format: String,
+    pub output: output::SessionOutput,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -238,6 +239,7 @@ impl CliSession {
         edit_mode: Option<EditMode>,
         retry_config: Option<RetryConfig>,
         output_format: String,
+        quiet: bool,
     ) -> Self {
         let messages = agent
             .config
@@ -246,6 +248,8 @@ impl CliSession {
             .await
             .map(|session| session.conversation.unwrap_or_default())
             .unwrap();
+
+        let output = output::SessionOutput::new().with_quiet(quiet);
 
         CliSession {
             agent,
@@ -259,6 +263,7 @@ impl CliSession {
             edit_mode,
             retry_config,
             output_format,
+            output,
         }
     }
 
@@ -475,7 +480,7 @@ impl CliSession {
         let history_manager = HistoryManager::new();
         history_manager.load(&mut editor);
 
-        output::display_greeting();
+        self.output.display_greeting();
         loop {
             self.display_context_usage().await?;
 
@@ -542,15 +547,15 @@ impl CliSession {
             InputResult::AddExtension(cmd) => {
                 history.save(editor);
                 match self.add_extension(cmd.clone()).await {
-                    Ok(_) => output::render_extension_success(&cmd),
-                    Err(e) => output::render_extension_error(&cmd, &e.to_string()),
+                    Ok(_) => self.output.render_extension_success(&cmd),
+                    Err(e) => self.output.render_extension_error(&cmd, &e.to_string()),
                 }
             }
             InputResult::AddBuiltin(names) => {
                 history.save(editor);
                 match self.add_builtin(names.clone()).await {
-                    Ok(_) => output::render_builtin_success(&names),
-                    Err(e) => output::render_builtin_error(&names, &e.to_string()),
+                    Ok(_) => self.output.render_builtin_success(&names),
+                    Err(e) => self.output.render_builtin_error(&names, &e.to_string()),
                 }
             }
             InputResult::ToggleTheme => {
@@ -569,8 +574,8 @@ impl CliSession {
             InputResult::ListPrompts(extension) => {
                 history.save(editor);
                 match self.list_prompts(extension).await {
-                    Ok(prompts) => output::render_prompts(&prompts),
-                    Err(e) => output::render_error(&e.to_string()),
+                    Ok(prompts) => self.output.render_prompts(&prompts),
+                    Err(e) => self.output.render_error(&e.to_string()),
                 }
             }
             InputResult::GooseMode(mode) => {
@@ -582,7 +587,7 @@ impl CliSession {
             }
             InputResult::EndPlan => {
                 self.run_mode = RunMode::Normal;
-                output::render_exit_plan_mode();
+                self.output.render_exit_plan_mode();
             }
             InputResult::Clear => {
                 history.save(editor);
@@ -628,11 +633,11 @@ impl CliSession {
                 let _provider = self.agent.provider().await?;
 
                 output::run_status_hook("thinking");
-                output::show_thinking();
+                self.output.show_thinking();
                 let start_time = Instant::now();
                 self.process_agent_response(true, CancellationToken::default())
                     .await?;
-                output::hide_thinking();
+                self.output.hide_thinking();
 
                 let elapsed = start_time.elapsed();
                 let elapsed_str = format_elapsed_time(elapsed);
@@ -649,8 +654,8 @@ impl CliSession {
         Ok(())
     }
 
-    fn handle_toggle_theme(&self) {
-        let current = output::get_theme();
+    fn handle_toggle_theme(&mut self) {
+        let current = self.output.get_theme();
         let new_theme = match current {
             output::Theme::Ansi => {
                 println!("Switching to Light theme");
@@ -665,10 +670,10 @@ impl CliSession {
                 output::Theme::Ansi
             }
         };
-        output::set_theme(new_theme);
+        self.output.set_theme(new_theme);
     }
 
-    fn handle_select_theme(&self, theme_name: &str) {
+    fn handle_select_theme(&mut self, theme_name: &str) {
         let new_theme = match theme_name {
             "light" => {
                 println!("Switching to Light theme");
@@ -684,11 +689,11 @@ impl CliSession {
             }
             _ => output::Theme::Dark,
         };
-        output::set_theme(new_theme);
+        self.output.set_theme(new_theme);
     }
 
-    fn handle_toggle_full_tool_output(&self) {
-        let enabled = output::toggle_full_tool_output();
+    fn handle_toggle_full_tool_output(&mut self) {
+        let enabled = self.output.toggle_full_tool_output();
         if enabled {
             println!(
                 "{}",
@@ -708,12 +713,12 @@ impl CliSession {
         }
     }
 
-    fn handle_goose_mode(&self, mode: &str) -> Result<()> {
+    fn handle_goose_mode(&mut self, mode: &str) -> Result<()> {
         let config = Config::global();
         let mode = match GooseMode::from_str(&mode.to_lowercase()) {
             Ok(mode) => mode,
             Err(_) => {
-                output::render_error(&format!(
+                self.output.render_error(&format!(
                     "Invalid mode '{}'. Mode must be one of: auto, approve, chat, smart_approve",
                     mode
                 ));
@@ -721,13 +726,14 @@ impl CliSession {
             }
         };
         config.set_goose_mode(mode)?;
-        output::goose_mode_message(&format!("Goose mode set to '{:?}'", mode));
+        self.output
+            .goose_mode_message(&format!("Goose mode set to '{:?}'", mode));
         Ok(())
     }
 
     async fn handle_plan_mode(&mut self, options: input::PlanCommandOptions) -> Result<()> {
         self.run_mode = RunMode::Plan;
-        output::render_enter_plan_mode();
+        self.output.render_enter_plan_mode();
 
         if options.message_text.is_empty() {
             return Ok(());
@@ -748,7 +754,8 @@ impl CliSession {
             .replace_conversation(&self.session_id, &Conversation::default())
             .await
         {
-            output::render_error(&format!("Failed to clear session: {}", e));
+            self.output
+                .render_error(&format!("Failed to clear session: {}", e));
             return Ok(());
         }
 
@@ -763,13 +770,14 @@ impl CliSession {
             .apply()
             .await
         {
-            output::render_error(&format!("Failed to reset token counts: {}", e));
+            self.output
+                .render_error(&format!("Failed to reset token counts: {}", e));
             return Ok(());
         }
 
         self.messages.clear();
         tracing::info!("Chat context cleared by user.");
-        output::render_message(
+        self.output.render_message(
             &Message::assistant().with_text("Chat context cleared.\n"),
             self.debug,
         );
@@ -779,12 +787,12 @@ impl CliSession {
     async fn handle_recipe(&mut self, filepath_opt: Option<String>) {
         println!("{}", console::style("Generating Recipe").green());
 
-        output::show_thinking();
+        self.output.show_thinking();
         let recipe = self
             .agent
             .create_recipe(&self.session_id, self.messages.clone())
             .await;
-        output::hide_thinking();
+        self.output.hide_thinking();
 
         match recipe {
             Ok(recipe) => {
@@ -822,10 +830,10 @@ impl CliSession {
 
         if should_summarize {
             self.push_message(Message::user().with_text(COMPACT_TRIGGERS[0]));
-            output::show_thinking();
+            self.output.show_thinking();
             self.process_agent_response(true, CancellationToken::default())
                 .await?;
-            output::hide_thinking();
+            self.output.hide_thinking();
         } else {
             println!("{}", console::style("Compaction cancelled.").yellow());
         }
@@ -838,7 +846,7 @@ impl CliSession {
         reasoner: Arc<dyn Provider>,
     ) -> Result<(), anyhow::Error> {
         let plan_prompt = self.agent.get_plan_prompt(&self.session_id).await?;
-        output::show_thinking();
+        self.output.show_thinking();
         let (plan_response, _usage) = reasoner
             .complete(
                 &self.session_id,
@@ -847,8 +855,8 @@ impl CliSession {
                 &[],
             )
             .await?;
-        output::render_message(&plan_response, self.debug);
-        output::hide_thinking();
+        self.output.render_message(&plan_response, self.debug);
+        self.output.hide_thinking();
         let planner_response_type = classify_planner_response(
             &self.session_id,
             plan_response.as_concat_text(),
@@ -875,7 +883,7 @@ impl CliSession {
                     }
                 };
                 if should_act {
-                    output::render_act_on_plan();
+                    self.output.render_act_on_plan();
                     self.run_mode = RunMode::Normal;
                     // set goose mode: auto if that isn't already the case
                     let config = Config::global();
@@ -890,10 +898,10 @@ impl CliSession {
                     let plan_message = Message::user().with_text(plan_response.as_concat_text());
                     self.push_message(plan_message);
                     // act on the plan
-                    output::show_thinking();
+                    self.output.show_thinking();
                     self.process_agent_response(true, CancellationToken::default())
                         .await?;
-                    output::hide_thinking();
+                    self.output.hide_thinking();
 
                     // Reset run & goose mode
                     if curr_goose_mode != GooseMode::Auto {
@@ -969,10 +977,10 @@ impl CliSession {
                     match result {
                         Some(Ok(AgentEvent::Message(message))) => {
                             if let Some((id, security_prompt)) = find_tool_confirmation(&message) {
-                                let permission = prompt_tool_confirmation(&security_prompt)?;
+                                let permission = self.output.prompt_tool_confirmation(&security_prompt)?;
 
                                 if permission == Permission::Cancel {
-                                    output::render_text("Tool call cancelled. Returning to chat...", Some(Color::Yellow), true);
+                                    self.output.render_text("Tool call cancelled. Returning to chat...", Some(Color::Yellow), true);
                                     let mut response_message = Message::user();
                                     response_message.content.push(MessageContent::tool_response(
                                         id,
@@ -992,7 +1000,7 @@ impl CliSession {
                                     permission,
                                 }).await;
                             } else if let Some((elicitation_id, elicitation_message, schema)) = find_elicitation_request(&message) {
-                                output::hide_thinking();
+                                self.output.hide_thinking();
                                 let _ = progress_bars.hide();
 
                                 match elicitation::collect_elicitation_input(&elicitation_message, &schema) {
@@ -1011,13 +1019,13 @@ impl CliSession {
                                         let _ = self.agent.reply(response_message, session_config.clone(), Some(cancel_token.clone())).await?;
                                     }
                                     Ok(None) => {
-                                        output::render_text("Information request cancelled.", Some(Color::Yellow), true);
+                                        self.output.render_text("Information request cancelled.", Some(Color::Yellow), true);
                                         cancel_token_clone.cancel();
                                         drop(stream);
                                         break;
                                     }
                                     Err(e) => {
-                                        output::render_error(&format!("Failed to collect input: {}", e));
+                                        self.output.render_error(&format!("Failed to collect input: {}", e));
                                         cancel_token_clone.cancel();
                                         drop(stream);
                                         break;
@@ -1027,13 +1035,13 @@ impl CliSession {
                                 log_tool_metrics(&message, &self.messages);
                                 self.messages.push(message.clone());
 
-                                if interactive { output::hide_thinking() };
+                                if interactive { self.output.hide_thinking() };
                                 let _ = progress_bars.hide();
 
                                 if is_stream_json_mode {
                                     emit_stream_event(&StreamEvent::Message { message: message.clone() });
                                 } else if !is_json_mode {
-                                    output::render_message(&message, self.debug);
+                                    self.output.render_message(&message, self.debug);
                                 }
                             }
                         }
@@ -1046,6 +1054,7 @@ impl CliSession {
                                 interactive,
                                 is_json_mode,
                                 self.debug,
+                                &mut self.output,
                             );
                         }
                         Some(Ok(AgentEvent::HistoryReplaced(updated_conversation))) => {
@@ -1059,13 +1068,13 @@ impl CliSession {
                             }
                         }
                         Some(Err(e)) => {
-                            handle_agent_error(&e, is_stream_json_mode);
+                            handle_agent_error(&e, is_stream_json_mode, &mut self.output);
                             cancel_token_clone.cancel();
                             drop(stream);
                             if let Err(e) = self.handle_interrupted_messages(false).await {
                                 eprintln!("Error handling interruption: {}", e);
                             } else if !is_stream_json_mode {
-                                output::render_error(
+                                self.output.render_error(
                                     "The error above was an exception we were not able to handle.\n\
                                     These errors are often related to connection or authentication\n\
                                     We've removed the conversation up to the most recent user message\n\
@@ -1074,7 +1083,10 @@ impl CliSession {
                             }
                             break;
                         }
-                        None => break,
+                        None => {
+                            self.output.finish();
+                            break;
+                        }
                     }
                 }
                 _ = cancel_token_clone.cancelled() => {
@@ -1171,7 +1183,7 @@ impl CliSession {
             }
             self.push_message(response_message);
             self.push_message(Message::assistant().with_text(interrupt_prompt));
-            output::render_message(
+            self.output.render_message(
                 &Message::assistant().with_text(interrupt_prompt),
                 self.debug,
             );
@@ -1180,7 +1192,7 @@ impl CliSession {
                 match last_msg.content.first() {
                     Some(MessageContent::ToolResponse(_)) => {
                         self.push_message(Message::assistant().with_text(interrupt_prompt));
-                        output::render_message(
+                        self.output.render_message(
                             &Message::assistant().with_text(interrupt_prompt),
                             self.debug,
                         );
@@ -1189,7 +1201,7 @@ impl CliSession {
                         self.messages.pop();
                         let assistant_msg = Message::assistant().with_text(interrupt_prompt);
                         self.push_message(assistant_msg.clone());
-                        output::render_message(&assistant_msg, self.debug);
+                        self.output.render_message(&assistant_msg, self.debug);
                     }
                     None => {
                         // Empty message content — nothing to do, just continue gracefully
@@ -1246,7 +1258,7 @@ impl CliSession {
     }
 
     /// Render all past messages from the session history
-    pub fn render_message_history(&self) {
+    pub fn render_message_history(&mut self) {
         if self.messages.is_empty() {
             return;
         }
@@ -1259,7 +1271,7 @@ impl CliSession {
 
         // Render each message
         for message in self.messages.iter() {
-            output::render_message(message, self.debug);
+            self.output.render_message(message, self.debug);
         }
 
         println!();
@@ -1298,12 +1310,13 @@ impl CliSession {
             Ok(metadata) => {
                 let total_tokens = metadata.total_tokens.unwrap_or(0) as usize;
 
-                output::display_context_usage(total_tokens, context_limit);
+                self.output
+                    .display_context_usage(total_tokens, context_limit);
 
                 if show_cost {
                     let input_tokens = metadata.input_tokens.unwrap_or(0) as usize;
                     let output_tokens = metadata.output_tokens.unwrap_or(0) as usize;
-                    output::display_cost_usage(
+                    self.output.display_cost_usage(
                         &provider_name,
                         &model_config.model_name,
                         input_tokens,
@@ -1312,7 +1325,7 @@ impl CliSession {
                 }
             }
             Err(_) => {
-                output::display_context_usage(0, context_limit);
+                self.output.display_context_usage(0, context_limit);
             }
         }
 
@@ -1323,14 +1336,16 @@ impl CliSession {
     async fn handle_prompt_command(&mut self, opts: input::PromptCommandOptions) -> Result<()> {
         // name is required
         if opts.name.is_empty() {
-            output::render_error("Prompt name argument is required");
+            self.output.render_error("Prompt name argument is required");
             return Ok(());
         }
 
         if opts.info {
             match self.get_prompt_info(&opts.name).await? {
-                Some(info) => output::render_prompt_info(&info),
-                None => output::render_error(&format!("Prompt '{}' not found", opts.name)),
+                Some(info) => self.output.render_prompt_info(&info),
+                None => self
+                    .output
+                    .render_error(&format!("Prompt '{}' not found", opts.name)),
             }
         } else {
             // Convert the arguments HashMap to a Value
@@ -1352,7 +1367,7 @@ impl CliSession {
                         };
 
                         if msg.role != expected_role {
-                            output::render_error(&format!(
+                            self.output.render_error(&format!(
                                 "Expected {:?} message at position {}, but found {:?}",
                                 expected_role, i, msg.role
                             ));
@@ -1363,7 +1378,7 @@ impl CliSession {
                         }
 
                         if msg.role == rmcp::model::Role::User {
-                            output::render_message(&msg, self.debug);
+                            self.output.render_message(&msg, self.debug);
                         }
                         self.push_message(msg);
                     }
@@ -1380,13 +1395,13 @@ impl CliSession {
                             }
                         }
 
-                        output::show_thinking();
+                        self.output.show_thinking();
                         self.process_agent_response(true, CancellationToken::default())
                             .await?;
-                        output::hide_thinking();
+                        self.output.hide_thinking();
                     }
                 }
-                Err(e) => output::render_error(&e.to_string()),
+                Err(e) => self.output.render_error(&e.to_string()),
             }
         }
 
@@ -1447,56 +1462,6 @@ fn emit_stream_event(event: &StreamEvent) {
     }
 }
 
-/// Prompt user for tool call confirmation, returns the Permission selected
-fn prompt_tool_confirmation(security_prompt: &Option<String>) -> Result<Permission> {
-    output::hide_thinking();
-
-    let prompt = if let Some(security_message) = security_prompt {
-        println!("\n{}", security_message);
-        "Do you allow this tool call?".to_string()
-    } else {
-        "Goose would like to call the above tool, do you allow?".to_string()
-    };
-
-    let permission_result = if security_prompt.is_none() {
-        cliclack::select(prompt)
-            .item(Permission::AllowOnce, "Allow", "Allow the tool call once")
-            .item(
-                Permission::AlwaysAllow,
-                "Always Allow",
-                "Always allow the tool call",
-            )
-            .item(Permission::DenyOnce, "Deny", "Deny the tool call")
-            .item(
-                Permission::Cancel,
-                "Cancel",
-                "Cancel the AI response and tool call",
-            )
-            .interact()
-    } else {
-        cliclack::select(prompt)
-            .item(Permission::AllowOnce, "Allow", "Allow the tool call once")
-            .item(Permission::DenyOnce, "Deny", "Deny the tool call")
-            .item(
-                Permission::Cancel,
-                "Cancel",
-                "Cancel the AI response and tool call",
-            )
-            .interact()
-    };
-
-    match permission_result {
-        Ok(p) => Ok(p),
-        Err(e) => {
-            if e.kind() == std::io::ErrorKind::Interrupted {
-                Ok(Permission::Cancel)
-            } else {
-                Err(e.into())
-            }
-        }
-    }
-}
-
 /// Extract tool confirmation request from a message
 fn find_tool_confirmation(message: &Message) -> Option<(String, Option<String>)> {
     message.content.iter().find_map(|content| {
@@ -1535,6 +1500,7 @@ fn handle_mcp_notification(
     interactive: bool,
     is_json_mode: bool,
     debug: bool,
+    output: &mut output::SessionOutput,
 ) {
     match notification {
         ServerNotification::LoggingMessageNotification(log_notif) => {
@@ -1560,16 +1526,14 @@ fn handle_mcp_notification(
                             emit_stream_event(&StreamEvent::Notification {
                                 extension_id: extension_id.to_string(),
                                 data: NotificationData::Log {
-                                    message: output::format_subagent_tool_call_message(
-                                        subagent_id,
-                                        tool_name,
-                                    ),
+                                    message: output
+                                        .format_subagent_tool_call_message(subagent_id, tool_name),
                                 },
                             });
                             return;
                         }
                         if !is_json_mode {
-                            output::render_subagent_tool_call(
+                            output.render_subagent_tool_call(
                                 subagent_id,
                                 tool_name,
                                 arguments.as_ref(),
@@ -1599,6 +1563,7 @@ fn handle_mcp_notification(
                     progress_bars,
                     interactive,
                     is_json_mode,
+                    output,
                 );
             }
         }
@@ -1648,8 +1613,7 @@ fn format_logging_notification(
                         format!("💭 {}", msg)
                     }
                     Some("response_generated") => {
-                        let config = Config::global();
-                        let min_priority = config
+                        let min_priority = Config::global()
                             .get_param::<f32>("GOOSE_CLI_MIN_PRIORITY")
                             .ok()
                             .unwrap_or(output::DEFAULT_MIN_PRIORITY);
@@ -1692,6 +1656,7 @@ fn display_log_notification(
     progress_bars: &mut output::McpSpinners,
     interactive: bool,
     is_json_mode: bool,
+    output: &mut output::SessionOutput,
 ) {
     if subagent_id.is_some() {
         if interactive {
@@ -1712,8 +1677,7 @@ fn display_log_notification(
                 std::io::stdout().flush().unwrap();
             }
         } else if ntype == "shell_output" {
-            let config = Config::global();
-            let min_priority = config
+            let min_priority = Config::global()
                 .get_param::<f32>("GOOSE_CLI_MIN_PRIORITY")
                 .ok()
                 .unwrap_or(output::DEFAULT_MIN_PRIORITY);
@@ -1727,8 +1691,8 @@ fn display_log_notification(
                 }
             }
         }
-    } else if output::is_showing_thinking() {
-        output::set_thinking_message(&formatted_message.to_string());
+    } else if output.is_showing_thinking() {
+        output.set_thinking_message(&formatted_message.to_string());
     } else {
         progress_bars.log(formatted_message);
     }
@@ -1781,7 +1745,11 @@ fn log_tool_metrics(message: &Message, messages: &Conversation) {
 }
 
 /// Handle and display an agent error
-fn handle_agent_error(e: &anyhow::Error, is_stream_json_mode: bool) {
+fn handle_agent_error(
+    e: &anyhow::Error,
+    is_stream_json_mode: bool,
+    output: &mut output::SessionOutput,
+) {
     let error_msg = e.to_string();
 
     if is_stream_json_mode {
@@ -1800,7 +1768,7 @@ fn handle_agent_error(e: &anyhow::Error, is_stream_json_mode: bool) {
         .unwrap_or(false)
     {
         if !is_stream_json_mode {
-            output::render_text(
+            output.render_text(
                 "Compaction requested. Should have happened in the agent!",
                 Some(Color::Yellow),
                 true,

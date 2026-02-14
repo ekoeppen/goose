@@ -233,6 +233,7 @@ async fn offer_extension_debugging_help(
         None,
         None,
         "text".to_string(),
+        false,
     )
     .await;
 
@@ -383,7 +384,8 @@ fn resolve_provider_and_model(
         let temperature = recipe_settings.and_then(|s| s.temperature);
         goose::model::ModelConfig::new(&model_name)
             .unwrap_or_else(|e| {
-                output::render_error(&format!("Failed to create model configuration: {}", e));
+                let mut output = output::SessionOutput::new();
+                output.render_error(&format!("Failed to create model configuration: {}", e));
                 process::exit(1);
             })
             .with_temperature(temperature)
@@ -408,11 +410,12 @@ async fn resolve_session_id(
             .expect("Could not create session");
         session.id
     } else if session_config.resume {
+        let mut output = output::SessionOutput::new();
         if let Some(ref session_id) = session_config.session_id {
             match session_manager.get_session(session_id, false).await {
                 Ok(_) => session_id.clone(),
                 Err(_) => {
-                    output::render_error(&format!(
+                    output.render_error(&format!(
                         "Cannot resume session {} - no such session exists",
                         style(session_id).cyan()
                     ));
@@ -423,7 +426,7 @@ async fn resolve_session_id(
             match session_manager.list_sessions().await {
                 Ok(sessions) if !sessions.is_empty() => sessions[0].id.clone(),
                 _ => {
-                    output::render_error("Cannot resume - no previous sessions found");
+                    output.render_error("Cannot resume - no previous sessions found");
                     process::exit(1);
                 }
             }
@@ -434,13 +437,14 @@ async fn resolve_session_id(
 }
 
 async fn handle_resumed_session_workdir(agent: &Agent, session_id: &str, interactive: bool) {
+    let mut output = output::SessionOutput::new();
     let session = agent
         .config
         .session_manager
         .get_session(session_id, false)
         .await
         .unwrap_or_else(|e| {
-            output::render_error(&format!("Failed to read session metadata: {}", e));
+            output.render_error(&format!("Failed to read session metadata: {}", e));
             process::exit(1);
         });
 
@@ -464,12 +468,12 @@ async fn handle_resumed_session_workdir(agent: &Agent, session_id: &str, interac
 
         if change_workdir {
             if !session.working_dir.exists() {
-                output::render_error(&format!(
+                output.render_error(&format!(
                     "Cannot switch to original working directory - {} no longer exists",
                     style(session.working_dir.display()).cyan()
                 ));
             } else if let Err(e) = std::env::set_current_dir(&session.working_dir) {
-                output::render_error(&format!(
+                output.render_error(&format!(
                     "Failed to switch to original working directory: {}",
                     e
                 ));
@@ -611,11 +615,12 @@ pub async fn build_session(session_config: SessionBuilderConfig) -> CliSession {
         handle_resumed_session_workdir(&agent, &session_id, session_config.interactive).await;
     }
 
+    let mut output = output::SessionOutput::new();
     let extensions_for_provider =
         match collect_extension_configs(&agent, &session_config, recipe, &session_id).await {
             Ok(exts) => exts,
             Err(e) => {
-                output::render_error(&format!("Failed to collect extensions: {}", e));
+                output.render_error(&format!("Failed to collect extensions: {}", e));
                 process::exit(1);
             }
         };
@@ -629,7 +634,7 @@ pub async fn build_session(session_config: SessionBuilderConfig) -> CliSession {
     {
         Ok(provider) => provider,
         Err(e) => {
-            output::render_error(&format!(
+            output.render_error(&format!(
                 "Error {}.\n\
                 Please check your system keychain and run 'goose configure' again.\n\
                 If your system is unable to use the keyring, please try setting secret key(s) via environment variables.\n\
@@ -656,7 +661,7 @@ pub async fn build_session(session_config: SessionBuilderConfig) -> CliSession {
         .update_provider(new_provider, &session_id)
         .await
         .unwrap_or_else(|e| {
-            output::render_error(&format!("Failed to initialize agent: {}", e));
+            output.render_error(&format!("Failed to initialize agent: {}", e));
             process::exit(1);
         });
 
@@ -695,7 +700,7 @@ pub async fn build_session(session_config: SessionBuilderConfig) -> CliSession {
 
     let debug_mode = session_config.debug || config.get_param("GOOSE_DEBUG").unwrap_or(false);
 
-    let session = CliSession::new(
+    let mut session = CliSession::new(
         Arc::try_unwrap(agent_ptr).unwrap_or_else(|_| panic!("There should be no more references")),
         session_id.clone(),
         debug_mode,
@@ -704,13 +709,14 @@ pub async fn build_session(session_config: SessionBuilderConfig) -> CliSession {
         edit_mode,
         recipe.and_then(|r| r.retry.clone()),
         session_config.output_format.clone(),
+        session_config.quiet,
     )
     .await;
 
     configure_session_prompts(&session, config, &session_config, &session_id).await;
 
     if !session_config.quiet {
-        output::display_session_info(
+        session.output.display_session_info(
             session_config.resume,
             &resolved.provider_name,
             &resolved.model_name,

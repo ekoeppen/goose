@@ -227,9 +227,14 @@ impl Agent {
         let toolshim_tools = toolshim_tools.to_owned();
         let provider = provider.clone();
 
+        let use_streaming = provider.supports_streaming()
+            && crate::config::Config::global()
+                .get_goose_output_mode_streaming()
+                .unwrap_or(true);
+
         // Capture errors during stream creation and return them as part of the stream
         // so they can be handled by the existing error handling logic in the agent
-        let stream_result = if provider.supports_streaming() {
+        let stream_result = if use_streaming {
             debug!("WAITING_LLM_STREAM_START");
             let result = provider
                 .stream(

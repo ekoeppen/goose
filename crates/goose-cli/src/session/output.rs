@@ -1,5 +1,5 @@
 use anstream::println;
-use bat::WrappingMode;
+use termimad::MadSkin;
 use console::{measure_text_width, style, Color, Term};
 use goose::config::Config;
 use goose::conversation::message::{
@@ -20,9 +20,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 pub const DEFAULT_MIN_PRIORITY: f32 = 0.0;
-pub const DEFAULT_CLI_LIGHT_THEME: &str = "GitHub";
-pub const DEFAULT_CLI_DARK_THEME: &str = "zenburn";
-
 // Re-export theme for use in main
 #[derive(Clone, Copy)]
 pub enum Theme {
@@ -32,18 +29,6 @@ pub enum Theme {
 }
 
 impl Theme {
-    fn as_str(&self) -> String {
-        match self {
-            Theme::Light => Config::global()
-                .get_param::<String>("GOOSE_CLI_LIGHT_THEME")
-                .unwrap_or(DEFAULT_CLI_LIGHT_THEME.to_string()),
-            Theme::Dark => Config::global()
-                .get_param::<String>("GOOSE_CLI_DARK_THEME")
-                .unwrap_or(DEFAULT_CLI_DARK_THEME.to_string()),
-            Theme::Ansi => "base16".to_string(),
-        }
-    }
-
     fn from_config_str(val: &str) -> Self {
         if val.eq_ignore_ascii_case("light") {
             Theme::Light
@@ -59,6 +44,18 @@ impl Theme {
             Theme::Light => "light".to_string(),
             Theme::Dark => "dark".to_string(),
             Theme::Ansi => "ansi".to_string(),
+        }
+    }
+
+    fn to_skin(&self) -> MadSkin {
+        match self {
+            Theme::Light => MadSkin::default_light(),
+            Theme::Dark => {
+                let mut skin = MadSkin::default_dark();
+                skin.set_headers_fg(termimad::crossterm::style::Color::Cyan);
+                skin
+            }
+            Theme::Ansi => MadSkin::default(),
         }
     }
 }
@@ -737,21 +734,12 @@ fn print_tool_header(call: &CallToolRequestParams) {
 }
 
 // Respect NO_COLOR, as https://crates.io/crates/console already does
-pub fn env_no_color() -> bool {
-    // if NO_COLOR is defined at all disable colors
-    std::env::var_os("NO_COLOR").is_none()
-}
+
 
 fn print_markdown(content: &str, theme: Theme) {
     if std::io::stdout().is_terminal() {
-        bat::PrettyPrinter::new()
-            .input(bat::Input::from_bytes(content.as_bytes()))
-            .theme(theme.as_str())
-            .colored_output(env_no_color())
-            .language("Markdown")
-            .wrapping_mode(WrappingMode::NoWrapping(true))
-            .print()
-            .unwrap();
+        let skin = theme.to_skin();
+        skin.print_text(content);
     } else {
         print!("{}", content);
     }

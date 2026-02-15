@@ -1,0 +1,20 @@
+{
+  "bold": "Bold",
+  "italic": "Italic",
+  "strikeout": "CrossedOut",
+  "paragraph": "ansi(11) left 3",
+  "headers": [
+    "ansi(10) Bold Underlined 3",
+    "ansi(10) Bold Italic 3",
+    "ansi(10) Italic 3",
+    "ansi(10) Italic 3",
+    "ansi(10) Italic 3",
+    "ansi(10) Italic 3",
+    "ansi(11) Italic 3"
+  ],
+  "bullet": "• ansi(11)",
+  "horizontal_rule": "― ansi(10)",
+  "inline_code": "ansi(7) ansi(11) Reverse",
+  "code_block": "ansi(7) ansi(11) Reverse 5 1",
+  "table": "ansi(11) 3"
+}

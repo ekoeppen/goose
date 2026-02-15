@@ -661,7 +661,7 @@ impl CliSession {
                 println!("Switching to Dark theme");
                 output::Theme::Dark
             }
-            output::Theme::Dark => {
+            output::Theme::Dark | output::Theme::Custom(_) => {
                 println!("Switching to Ansi theme");
                 output::Theme::Ansi
             }

@@ -1,6 +1,5 @@
 use anstream::println;
 use console::{measure_text_width, style, Color, Term};
-use termimad::MadSkin;
 use goose::config::Config;
 use goose::conversation::message::{
     ActionRequiredData, Message, MessageContent, ToolRequest, ToolResponse,
@@ -18,18 +17,19 @@ use std::io::{Error, IsTerminal, Write};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use termimad::MadSkin;
 
 use super::streaming_buffer::MarkdownBuffer;
 
 pub const DEFAULT_MIN_PRIORITY: f32 = 0.0;
 
-
 // Re-export theme for use in main
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum Theme {
     Light,
     Dark,
     Ansi,
+    Custom(String),
 }
 
 impl Theme {
@@ -38,16 +38,22 @@ impl Theme {
             Theme::Light => MadSkin::default_light(),
             Theme::Dark => MadSkin::default_dark(),
             Theme::Ansi => MadSkin::default(),
+            Theme::Custom(path) => load_custom_skin(Path::new(path)).unwrap_or_else(|e| {
+                eprintln!(
+                    "Failed to load custom skin from {}: {}. Falling back to default.",
+                    path, e
+                );
+                MadSkin::default()
+            }),
         }
     }
 
     fn from_config_str(val: &str) -> Self {
-        if val.eq_ignore_ascii_case("light") {
-            Theme::Light
-        } else if val.eq_ignore_ascii_case("ansi") {
-            Theme::Ansi
-        } else {
-            Theme::Dark
+        match val.to_lowercase().as_str() {
+            "light" => Theme::Light,
+            "dark" => Theme::Dark,
+            "ansi" => Theme::Ansi,
+            _ => Theme::Custom(val.to_string()),
         }
     }
 
@@ -56,8 +62,15 @@ impl Theme {
             Theme::Light => "light".to_string(),
             Theme::Dark => "dark".to_string(),
             Theme::Ansi => "ansi".to_string(),
+            Theme::Custom(path) => path.clone(),
         }
     }
+}
+
+fn load_custom_skin(path: &Path) -> anyhow::Result<MadSkin> {
+    let content = std::fs::read_to_string(path)?;
+    let skin: MadSkin = deser_hjson::from_str(&content)?;
+    Ok(skin)
 }
 
 thread_local! {
@@ -75,25 +88,14 @@ thread_local! {
 
 pub fn set_theme(theme: Theme) {
     let config = Config::global();
-    config
-        .set_param("GOOSE_CLI_THEME", theme.as_config_string())
-        .expect("Failed to set theme");
-    CURRENT_THEME.with(|t| *t.borrow_mut() = theme);
-
-    let config = Config::global();
-    let theme_str = match theme {
-        Theme::Light => "light",
-        Theme::Dark => "dark",
-        Theme::Ansi => "ansi",
-    };
-
-    if let Err(e) = config.set_param("GOOSE_CLI_THEME", theme_str) {
+    if let Err(e) = config.set_param("GOOSE_CLI_THEME", theme.as_config_string()) {
         eprintln!("Failed to save theme setting to config: {}", e);
     }
+    CURRENT_THEME.with(|t| *t.borrow_mut() = theme);
 }
 
 pub fn get_theme() -> Theme {
-    CURRENT_THEME.with(|t| *t.borrow())
+    CURRENT_THEME.with(|t| t.borrow().clone())
 }
 
 pub fn toggle_full_tool_output() -> bool {
@@ -227,9 +229,9 @@ pub fn render_message(message: &Message, debug: bool) {
                     println!("action_required(elicitation_response): {}", id)
                 }
             },
-            MessageContent::Text(text) => print_markdown(&text.text, theme),
-            MessageContent::ToolRequest(req) => render_tool_request(req, theme, debug),
-            MessageContent::ToolResponse(resp) => render_tool_response(resp, theme, debug),
+            MessageContent::Text(text) => print_markdown(&text.text, &theme),
+            MessageContent::ToolRequest(req) => render_tool_request(req, &theme, debug),
+            MessageContent::ToolResponse(resp) => render_tool_response(resp, &theme, debug),
             MessageContent::Image(image) => {
                 println!("Image: [data: {}, type: {}]", image.data, image.mime_type);
             }
@@ -238,13 +240,13 @@ pub fn render_message(message: &Message, debug: bool) {
                     && std::io::stdout().is_terminal()
                 {
                     println!("\n{}", style("Thinking:").dim().italic());
-                    print_markdown(&thinking.thinking, theme);
+                    print_markdown(&thinking.thinking, &theme);
                 }
             }
             MessageContent::RedactedThinking(_) => {
                 // For redacted thinking, print thinking was redacted
                 println!("\n{}", style("Thinking:").dim().italic());
-                print_markdown("Thinking was redacted", theme);
+                print_markdown("Thinking was redacted", &theme);
             }
             MessageContent::SystemNotification(notification) => {
                 use goose::conversation::message::SystemNotificationType;
@@ -286,20 +288,20 @@ pub fn render_message_streaming(
                 had_text = true;
                 // Push to buffer and render any safe content
                 if let Some(safe_content) = buffer.push(&text.text) {
-                    print_markdown(&safe_content, theme);
+                    print_markdown(&safe_content, &theme);
                 }
             }
             // For non-text content, flush the buffer first then render normally
             MessageContent::ToolRequest(req) => {
-                flush_markdown_buffer(buffer, theme);
-                render_tool_request(req, theme, debug);
+                flush_markdown_buffer(buffer, &theme);
+                render_tool_request(req, &theme, debug);
             }
             MessageContent::ToolResponse(resp) => {
-                flush_markdown_buffer(buffer, theme);
-                render_tool_response(resp, theme, debug);
+                flush_markdown_buffer(buffer, &theme);
+                render_tool_response(resp, &theme, debug);
             }
             MessageContent::ActionRequired(action) => {
-                flush_markdown_buffer(buffer, theme);
+                flush_markdown_buffer(buffer, &theme);
                 match &action.data {
                     ActionRequiredData::ToolConfirmation { tool_name, .. } => {
                         println!("action_required(tool_confirmation): {}", tool_name)
@@ -313,22 +315,22 @@ pub fn render_message_streaming(
                 }
             }
             MessageContent::Image(image) => {
-                flush_markdown_buffer(buffer, theme);
+                flush_markdown_buffer(buffer, &theme);
                 println!("Image: [data: {}, type: {}]", image.data, image.mime_type);
             }
             MessageContent::Thinking(thinking) => {
                 if std::env::var("GOOSE_CLI_SHOW_THINKING").is_ok()
                     && std::io::stdout().is_terminal()
                 {
-                    flush_markdown_buffer(buffer, theme);
+                    flush_markdown_buffer(buffer, &theme);
                     println!("\n{}", style("Thinking:").dim().italic());
-                    print_markdown(&thinking.thinking, theme);
+                    print_markdown(&thinking.thinking, &theme);
                 }
             }
             MessageContent::RedactedThinking(_) => {
-                flush_markdown_buffer(buffer, theme);
+                flush_markdown_buffer(buffer, &theme);
                 println!("\n{}", style("Thinking:").dim().italic());
-                print_markdown("Thinking was redacted", theme);
+                print_markdown("Thinking was redacted", &theme);
             }
             MessageContent::SystemNotification(notification) => {
                 use goose::conversation::message::SystemNotificationType;
@@ -339,14 +341,14 @@ pub fn render_message_streaming(
                         set_thinking_message(&notification.msg);
                     }
                     SystemNotificationType::InlineMessage => {
-                        flush_markdown_buffer(buffer, theme);
+                        flush_markdown_buffer(buffer, &theme);
                         hide_thinking();
                         println!("\n{}", style(&notification.msg).yellow());
                     }
                 }
             }
             _ => {
-                flush_markdown_buffer(buffer, theme);
+                flush_markdown_buffer(buffer, &theme);
                 println!("WARNING: Message content type could not be rendered");
             }
         }
@@ -357,7 +359,7 @@ pub fn render_message_streaming(
 }
 
 /// Flush any remaining content in the markdown buffer
-pub fn flush_markdown_buffer(buffer: &mut MarkdownBuffer, theme: Theme) {
+pub fn flush_markdown_buffer(buffer: &mut MarkdownBuffer, theme: &Theme) {
     let remaining = buffer.flush();
     if !remaining.is_empty() {
         print_markdown(&remaining, theme);
@@ -366,7 +368,7 @@ pub fn flush_markdown_buffer(buffer: &mut MarkdownBuffer, theme: Theme) {
 
 /// Convenience function to flush with the current theme
 pub fn flush_markdown_buffer_current_theme(buffer: &mut MarkdownBuffer) {
-    flush_markdown_buffer(buffer, get_theme());
+    flush_markdown_buffer(buffer, &get_theme());
 }
 
 pub fn render_text(text: &str, color: Option<Color>, dim: bool) {
@@ -417,7 +419,7 @@ pub fn goose_mode_message(text: &str) {
     println!("\n{}", style(text).yellow(),);
 }
 
-fn render_tool_request(req: &ToolRequest, theme: Theme, debug: bool) {
+fn render_tool_request(req: &ToolRequest, theme: &Theme, debug: bool) {
     match &req.tool_call {
         Ok(call) => match call.name.to_string().as_str() {
             "developer__text_editor" => render_text_editor_request(call, debug),
@@ -432,7 +434,7 @@ fn render_tool_request(req: &ToolRequest, theme: Theme, debug: bool) {
     }
 }
 
-fn render_tool_response(resp: &ToolResponse, theme: Theme, debug: bool) {
+fn render_tool_response(resp: &ToolResponse, theme: &Theme, debug: bool) {
     let config = Config::global();
 
     match &resp.tool_result {
@@ -833,9 +835,7 @@ fn print_tool_header(call: &CallToolRequestParams) {
     println!("{}", tool_header);
 }
 
-
-
-fn print_markdown(content: &str, theme: Theme) {
+fn print_markdown(content: &str, theme: &Theme) {
     if std::io::stdout().is_terminal() {
         let skin = theme.to_skin();
         skin.print_text(content);

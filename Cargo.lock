@@ -2908,6 +2908,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "deser-hjson"
+version = "2.2.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fbc1498156ddf9adc2eb251c1697b3a0dea599c94fb8cf1313f986adcc70f6e"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "diff"
 version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4244,6 +4253,7 @@ dependencies = [
  "clap_mangen",
  "cliclack",
  "console 0.16.2",
+ "deser-hjson",
  "dotenvy",
  "etcetera 0.11.0",
  "futures",
